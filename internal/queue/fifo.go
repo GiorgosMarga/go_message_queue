@@ -17,8 +17,6 @@ func New() *Fifo {
 	return &Fifo{}
 }
 
-// 	// Ack confirms the processing of a message
-
 func (f *Fifo) Enqueue(msg *Message) error {
 	n := &Node{
 		value: msg,
