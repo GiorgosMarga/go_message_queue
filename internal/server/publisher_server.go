@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"time"
 )
 
 type PublisherServer struct {
@@ -30,15 +31,24 @@ func (ps *PublisherServer) CreateConn() error {
 func (ps *PublisherServer) PublishMessage(body []byte) error {
 	b := make([]byte, 4096)
 	id := rand.Intn(100)
-	binary.LittleEndian.PutUint64(b, uint64(id))
-	binary.LittleEndian.PutUint16(b[8:], uint16(len(body)))
-	copy(b[10:], body)
-
-	n, err := ps.conn.Write(b[:10+len(body)])
+	b[0] = 0
+	binary.LittleEndian.PutUint64(b[1:], uint64(id))
+	binary.LittleEndian.PutUint16(b[9:], uint16(len(body)))
+	copy(b[11:], body)
+	t := time.Now()
+	tb, err := t.MarshalBinary()
 	if err != nil {
 		return err
 	}
-	if n != 10+len(body) {
+	fmt.Println(len(tb))
+	copy(b[11+len(body):], tb)
+	binary.LittleEndian.PutUint16(b[11+len(body)+len(tb):], uint16(10))
+
+	n, err := ps.conn.Write(b[:11+len(body)+len(tb)+2])
+	if err != nil {
+		return err
+	}
+	if n != 13+len(body)+len(tb) {
 		return fmt.Errorf("did not write the entire buffer")
 	}
 	return nil

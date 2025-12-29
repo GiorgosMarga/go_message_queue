@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	s := server.NewQueueServer("8080")
+	s := server.NewQueueServer("8080", server.Persistent)
 
 	if err := s.Start(); err != nil {
 		fmt.Println(err)
