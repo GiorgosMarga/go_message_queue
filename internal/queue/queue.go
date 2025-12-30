@@ -2,7 +2,6 @@ package queue
 
 import (
 	"encoding/binary"
-	"fmt"
 	"time"
 )
 
@@ -39,11 +38,10 @@ func (m *Message) Decode(b []byte) error {
 	dataSize := binary.LittleEndian.Uint16(b[8:])
 	m.Body = make([]byte, dataSize)
 	copy(m.Body, b[10:10+dataSize])
-	err := m.Timestamp.UnmarshalBinary(b[10+dataSize:25+dataSize])
+	err := m.Timestamp.UnmarshalBinary(b[10+dataSize : 25+dataSize])
 	if err != nil {
 		return err
 	}
-	fmt.Println(m.Timestamp)
 	m.Priority = binary.LittleEndian.Uint16(b[25+dataSize:])
 	return nil
 }
