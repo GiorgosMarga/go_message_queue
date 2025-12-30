@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"net"
 	"time"
+
+	"github.com/GiorgosMarga/ibmmq/internal/queue"
 )
 
 type PublisherServer struct {
@@ -29,27 +31,25 @@ func (ps *PublisherServer) CreateConn() error {
 }
 
 func (ps *PublisherServer) PublishMessage(body []byte) error {
-	b := make([]byte, 4096)
-	id := rand.Intn(100)
-	b[0] = 0
-	binary.LittleEndian.PutUint64(b[1:], uint64(id))
-	binary.LittleEndian.PutUint16(b[9:], uint16(len(body)))
-	copy(b[11:], body)
-	t := time.Now()
-	tb, err := t.MarshalBinary()
+	// buffer to write is 4 bytes for the content size + 1 byte for the msg type + the `msg` bytes
+	msg := &queue.Message{
+		Id:        rand.Intn(100),
+		Body:      body,
+		Timestamp: time.Now(),
+		Priority:  0,
+	}
+	bmsg, err := msg.ToBytes()
 	if err != nil {
 		return err
 	}
-	fmt.Println(len(tb))
-	copy(b[11+len(body):], tb)
-	binary.LittleEndian.PutUint16(b[11+len(body)+len(tb):], uint16(10))
 
-	n, err := ps.conn.Write(b[:11+len(body)+len(tb)+2])
-	if err != nil {
-		return err
-	}
-	if n != 13+len(body)+len(tb) {
-		return fmt.Errorf("did not write the entire buffer")
-	}
-	return nil
+	b := make([]byte, 5+len(bmsg))
+	binary.LittleEndian.PutUint32(b, uint32(len(bmsg)))
+	b[4] = PublishMsg
+	copy(b[5:], bmsg)
+
+	fmt.Printf("Sending message with size: %d %d\n", len(b), len(b)-5)
+
+	_, err = ps.conn.Write(b)
+	return err
 }

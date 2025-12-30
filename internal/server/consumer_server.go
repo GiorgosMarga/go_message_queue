@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"net"
 	"time"
 
@@ -30,27 +31,35 @@ func (ps *ConsumerServer) CreateConn() error {
 }
 
 func (ps *ConsumerServer) ConsumeMessage() (*queue.Message, error) {
-	_, err := ps.conn.Write([]byte{1})
-	if err != nil {
-		return nil, err
-	}
-	b := make([]byte, 4096)
-	n, err := ps.conn.Read(b)
+	// Header: length + msg type
+	b := make([]byte, 5)
+	binary.LittleEndian.PutUint32(b, 0)
+	b[4] = ConsumeMsg
+	_, err := ps.conn.Write(b)
 	if err != nil {
 		return nil, err
 	}
 
-	if b[0] == 3 {
+	msgBuf := make([]byte, 4096)
+	n, err := ps.conn.Read(msgBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	if msgBuf[0] == EmptyQueueResp {
 		return nil, fmt.Errorf("no message")
 	}
 
 	m := &queue.Message{}
-	if err := m.Decode(b[:n]); err != nil {
+	if err := m.Decode(msgBuf[:n]); err != nil {
 		return nil, err
 	}
-	b[0] = AckMsg
-	binary.LittleEndian.PutUint64(b[1:], uint64(m.Id))
-	time.Sleep(10 * time.Second)
-	ps.conn.Write(b[:9])
-	return m, nil
+
+	ackBuf := make([]byte, 13) // header + id
+	binary.LittleEndian.PutUint32(ackBuf, 8)
+	ackBuf[4] = AckMsg
+	binary.LittleEndian.PutUint64(ackBuf[5:], uint64(m.Id))
+	time.Sleep(time.Duration(rand.Intn(20)) * time.Second)
+	_, err = ps.conn.Write(ackBuf)
+	return m, err
 }

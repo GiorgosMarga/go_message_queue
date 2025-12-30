@@ -3,20 +3,30 @@ package main
 import (
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/GiorgosMarga/ibmmq/internal/server"
 )
 
 func main() {
-	publisher := server.NewConsumerServer(":8080")
+	wg := &sync.WaitGroup{}
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			publisher := server.NewConsumerServer(":8080")
 
-	if err := publisher.CreateConn(); err != nil {
-		log.Fatal(err)
-	}
+			if err := publisher.CreateConn(); err != nil {
+				log.Fatal(err)
+			}
 
-	m, err := publisher.ConsumeMessage()
-	if err != nil {
-		log.Fatal(err)
+			m, err := publisher.ConsumeMessage()
+			if err != nil {
+				fmt.Println(err)
+			}
+			fmt.Printf("%+v\n", m)
+			wg.Done()
+		}()
 	}
-	fmt.Printf("%+v\n", m)
+	wg.Wait()
+
 }
