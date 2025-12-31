@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"math/rand"
 
 	"github.com/GiorgosMarga/ibmmq/internal/server"
 )
@@ -13,7 +14,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := publisher.PublishMessage([]byte("Hello from publisher")); err != nil {
+	priority := rand.Intn(100)
+	if err := publisher.PublishMessage([]byte("Hello from publisher"), uint16(priority)); err != nil {
 		log.Fatal(err)
 	}
 

@@ -42,12 +42,12 @@ const (
 	ConsumeMsg
 	DisconnectMsg
 	AckMsg
-	EmptyQueueResp
-)
 
-const (
-	NonPersistent = iota
-	Persistent    = iota
+	EmptyQueueResp
+
+	NonPersistent
+	Persistent
+	WithPriority
 )
 
 func NewQueueServer(lAddr string, mode int) *QueueServer {
@@ -56,7 +56,6 @@ func NewQueueServer(lAddr string, mode int) *QueueServer {
 	}
 	qs := &QueueServer{
 		listenAddr: lAddr,
-		queue:      queue.New(),
 		mode:       mode,
 		mtx:        &sync.Mutex{},
 	}
@@ -64,6 +63,7 @@ func NewQueueServer(lAddr string, mode int) *QueueServer {
 	if mode == Persistent {
 		qs.inFlightMsgs = make(map[int]*InFlightMessage)
 	}
+	qs.queue = queue.NewPriorityQueueWithCap(1024)
 	return qs
 }
 

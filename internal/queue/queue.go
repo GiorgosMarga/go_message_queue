@@ -2,7 +2,12 @@ package queue
 
 import (
 	"encoding/binary"
+	"errors"
 	"time"
+)
+
+var (
+	ErrEmptyQueue = errors.New("empty queue")
 )
 
 type Message struct {

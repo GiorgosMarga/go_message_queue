@@ -10,7 +10,7 @@ import (
 
 func main() {
 	wg := &sync.WaitGroup{}
-	for range 10 {
+	for range 1 {
 		wg.Add(1)
 		go func() {
 			publisher := server.NewConsumerServer(":8080")

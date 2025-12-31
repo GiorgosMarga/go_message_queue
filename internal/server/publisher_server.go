@@ -30,13 +30,13 @@ func (ps *PublisherServer) CreateConn() error {
 	return nil
 }
 
-func (ps *PublisherServer) PublishMessage(body []byte) error {
+func (ps *PublisherServer) PublishMessage(body []byte, priority uint16) error {
 	// buffer to write is 4 bytes for the content size + 1 byte for the msg type + the `msg` bytes
 	msg := &queue.Message{
 		Id:        rand.Intn(100),
 		Body:      body,
 		Timestamp: time.Now(),
-		Priority:  0,
+		Priority:  priority,
 	}
 	bmsg, err := msg.ToBytes()
 	if err != nil {
