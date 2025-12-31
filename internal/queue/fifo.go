@@ -1,7 +1,5 @@
 package queue
 
-import "fmt"
-
 type Node struct {
 	next  *Node
 	value *Message
@@ -13,7 +11,7 @@ type Fifo struct {
 	items uint
 }
 
-func New() *Fifo {
+func NewFifo() *Fifo {
 	return &Fifo{}
 }
 
@@ -36,7 +34,7 @@ func (f *Fifo) Enqueue(msg *Message) error {
 
 func (f *Fifo) Dequeue() (*Message, error) {
 	if f.items == 0 {
-		return nil, fmt.Errorf("empty queue")
+		return nil, ErrEmptyQueue
 	}
 	n := f.head
 	f.head = f.head.next
@@ -49,7 +47,7 @@ func (f *Fifo) Dequeue() (*Message, error) {
 
 func (f *Fifo) Peek() (*Message, error) {
 	if f.items == 0 {
-		return nil, fmt.Errorf("empty queue")
+		return nil, ErrEmptyQueue
 	}
 	return f.head.value, nil
 }
