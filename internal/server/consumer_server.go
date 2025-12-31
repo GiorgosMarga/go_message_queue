@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"net"
 	"time"
 
@@ -59,7 +58,7 @@ func (ps *ConsumerServer) ConsumeMessage() (*queue.Message, error) {
 	binary.LittleEndian.PutUint32(ackBuf, 8)
 	ackBuf[4] = AckMsg
 	binary.LittleEndian.PutUint64(ackBuf[5:], uint64(m.Id))
-	time.Sleep(time.Duration(rand.Intn(20)) * time.Second)
+	time.Sleep(time.Duration(0) * time.Second)
 	_, err = ps.conn.Write(ackBuf)
 	return m, err
 }

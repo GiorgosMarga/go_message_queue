@@ -10,6 +10,10 @@ var (
 	ErrEmptyQueue = errors.New("empty queue")
 )
 
+const (
+	HeaderSize = 5
+)
+
 type Message struct {
 	Id        int
 	Body      []byte

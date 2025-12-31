@@ -11,7 +11,7 @@ type Fifo struct {
 	items uint
 }
 
-func New() *Fifo {
+func NewFifo() *Fifo {
 	return &Fifo{}
 }
 

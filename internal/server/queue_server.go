@@ -7,12 +7,25 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/GiorgosMarga/ibmmq/internal/queue"
+)
+
+type Mode uint32
+
+const (
+	// Reliability Flags
+	ModeAckRequired Mode = 1 << iota // 1: Stay in RAM until Ack
+
+	// Storage Flags
+	ModeFileBacked // 2: Write to disk immediately
+	ModeVolatile   // 4: Delete as soon as Popped (default)
+
+	// Ordering Flags
+	ModePriority // 8: Use Heap logic instead of FIFO
 )
 
 type InFlightMessage struct {
@@ -22,19 +35,19 @@ type InFlightMessage struct {
 	totalRetries int
 }
 
-type QueueServer struct {
-	listenAddr   string
-	queue        queue.Queue
-	mode         int
-	inFlightMsgs map[int]*InFlightMessage
-	mtx          *sync.Mutex
-	ctx          context.Context
-}
-
 type Client struct {
 	conn     net.Conn
 	sendChan chan []byte
 	quitChan chan struct{}
+}
+
+type QueueServer struct {
+	listenAddr   string
+	queue        queue.Queue
+	inFlightMsgs map[int]*InFlightMessage
+	mtx          *sync.Mutex
+	ctx          context.Context
+	mode         Mode
 }
 
 const (
@@ -44,26 +57,33 @@ const (
 	AckMsg
 
 	EmptyQueueResp
-
-	NonPersistent
-	Persistent
-	WithPriority
 )
 
-func NewQueueServer(lAddr string, mode int) *QueueServer {
-	if !strings.HasPrefix(lAddr, ":") {
-		lAddr = ":" + lAddr
-	}
+// TODO: make queues thread-safe
+// TODO: make many inflight maps with unique locks (use % to find the right map)
+// TODO: instead of map use priority queue with timestamps check only first element if should retry to send
+// TODO: maybe use options_functions pattern
+// TODO: implement file backed queue
+// TODO: make debug mode for prints
+
+func NewQueueServer(lAddr string, mode Mode) *QueueServer {
 	qs := &QueueServer{
 		listenAddr: lAddr,
-		mode:       mode,
 		mtx:        &sync.Mutex{},
+		mode:       mode,
 	}
 
-	if mode == Persistent {
+	if mode&ModeAckRequired != 0 {
 		qs.inFlightMsgs = make(map[int]*InFlightMessage)
+	} else if mode&ModeFileBacked != 0 {
+		fmt.Println("Not implemented")
 	}
-	qs.queue = queue.NewPriorityQueueWithCap(1024)
+	if mode&ModePriority != 0 {
+		qs.queue = queue.NewPriorityQueueWithCap(1024)
+	} else {
+		qs.queue = queue.NewFifo()
+	}
+
 	return qs
 }
 
@@ -76,7 +96,8 @@ func (qs *QueueServer) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if qs.mode == Persistent {
+	// persistent mode -> at least once
+	if qs.mode&ModeAckRequired != 0 {
 		go qs.manageInFlightMsgs(ctx)
 	}
 
@@ -114,11 +135,17 @@ func (qs *QueueServer) manageInFlightMsgs(ctx context.Context) error {
 		case <-ticker.C:
 			qs.mtx.Lock()
 			msgs := make([]*InFlightMessage, 0, len(qs.inFlightMsgs))
-			for _, msg := range qs.inFlightMsgs {
+			for id, msg := range qs.inFlightMsgs {
 				if time.Since(msg.lastSendTry) < timeout {
 					continue
 				}
 				if msg.totalRetries == maxRetries {
+					fmt.Printf("Re-enquiuing msg: %v\n", msg.msg)
+					if err := qs.queue.Enqueue(msg.msg); err != nil {
+						fmt.Println(err)
+						continue
+					}
+					delete(qs.inFlightMsgs, id)
 					continue
 				}
 
@@ -137,6 +164,8 @@ func (qs *QueueServer) manageInFlightMsgs(ctx context.Context) error {
 				}
 				select {
 				case msg.client.sendChan <- b:
+				case <-msg.client.quitChan:
+					fmt.Println("Client has disconnected")
 				default:
 					fmt.Println("Slow client should close connection")
 				}
@@ -159,19 +188,20 @@ func (qs *QueueServer) handleConn(conn net.Conn) {
 	defer func(c *Client) {
 		close(c.quitChan)
 		conn.Close()
+
 	}(client)
 
 	go client.writeLoop()
 
 	fmt.Printf("[QS]: new connection: %v\n", conn.LocalAddr())
-	msgHeader := make([]byte, 5)
+	msgHeader := make([]byte, queue.HeaderSize)
 	for {
 		_, err := io.ReadFull(conn, msgHeader)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
 				return
 			}
-			fmt.Println("Header read:", err)
+			fmt.Printf("[QS]: Error reading header: %v\n", err)
 			continue
 		}
 		msgLen := binary.LittleEndian.Uint16(msgHeader)
@@ -180,7 +210,7 @@ func (qs *QueueServer) handleConn(conn net.Conn) {
 		b := make([]byte, msgLen)
 
 		if _, err = io.ReadFull(conn, b); err != nil {
-			fmt.Println("Error reading: ", err)
+			fmt.Printf("[QS]: Error reading message: %v\n", err)
 			return
 		}
 
@@ -234,7 +264,7 @@ func (qs *QueueServer) handleConsumeMsg(client *Client) error {
 	}
 
 	// 2. Thread-Safe In-Flight Registration
-	if qs.mode == Persistent {
+	if qs.mode&ModeAckRequired != 0 {
 		qs.mtx.Lock()
 		qs.inFlightMsgs[msg.Id] = &InFlightMessage{
 			client:      client,
@@ -264,17 +294,17 @@ func (qs *QueueServer) handleConsumeMsg(client *Client) error {
 }
 
 func (qs *QueueServer) handleAckMsg(b []byte) error {
-	qs.mtx.Lock()
-	defer qs.mtx.Unlock()
-	if qs.mode == NonPersistent {
+
+	if qs.mode&ModeAckRequired == 0 {
 		return fmt.Errorf("[QS]: received ack in non-persistent mode")
 	}
 	id := binary.LittleEndian.Uint64(b)
 
+	qs.mtx.Lock()
+	defer qs.mtx.Unlock()
 	if _, ok := qs.inFlightMsgs[int(id)]; !ok {
 		return fmt.Errorf("[QS]: ack id doesn't exist")
 	}
-
 	delete(qs.inFlightMsgs, int(id))
 	return nil
 }
