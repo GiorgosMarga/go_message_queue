@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"syscall"
@@ -59,11 +60,12 @@ const (
 	EmptyQueueResp
 )
 
+// TODO: implement file backed queue
+
 // TODO: make queues thread-safe
 // TODO: make many inflight maps with unique locks (use % to find the right map)
 // TODO: instead of map use priority queue with timestamps check only first element if should retry to send
 // TODO: maybe use options_functions pattern
-// TODO: implement file backed queue
 // TODO: make debug mode for prints
 
 func NewQueueServer(lAddr string, mode Mode) *QueueServer {
@@ -75,15 +77,20 @@ func NewQueueServer(lAddr string, mode Mode) *QueueServer {
 
 	if mode&ModeAckRequired != 0 {
 		qs.inFlightMsgs = make(map[int]*InFlightMessage)
-	} else if mode&ModeFileBacked != 0 {
-		fmt.Println("Not implemented")
 	}
-	if mode&ModePriority != 0 {
-		qs.queue = queue.NewPriorityQueueWithCap(1024)
+	if mode&ModeFileBacked != 0 {
+		var err error
+		qs.queue, err = queue.NewFileBackedQueue("file.mq", mode&ModePriority != 0)
+		if err != nil {
+			log.Fatal(err)
+		}
 	} else {
-		qs.queue = queue.NewFifo()
+		if mode&ModePriority != 0 {
+			qs.queue = queue.NewPriorityQueue()
+		} else {
+			qs.queue = queue.NewFifo()
+		}
 	}
-
 	return qs
 }
 
@@ -294,12 +301,13 @@ func (qs *QueueServer) handleConsumeMsg(client *Client) error {
 }
 
 func (qs *QueueServer) handleAckMsg(b []byte) error {
-
 	if qs.mode&ModeAckRequired == 0 {
 		return fmt.Errorf("[QS]: received ack in non-persistent mode")
 	}
 	id := binary.LittleEndian.Uint64(b)
-
+	if err := qs.queue.Ack(int(id)); err != nil {
+		return err
+	}
 	qs.mtx.Lock()
 	defer qs.mtx.Unlock()
 	if _, ok := qs.inFlightMsgs[int(id)]; !ok {
