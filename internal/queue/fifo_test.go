@@ -6,7 +6,7 @@ import (
 )
 
 func TestFifo(t *testing.T) {
-	fifo := New()
+	fifo := NewFifo()
 	items := 10_000_000
 	for i := range items {
 		fifo.Enqueue(&Message{
@@ -33,7 +33,7 @@ func BenchmarkFifo(b *testing.B) {
 	items := 10_000_000
 
 	for b.Loop() {
-		fifo := New()
+		fifo := NewFifo()
 		for i := range items {
 			fifo.Enqueue(&Message{
 				Id:        i,

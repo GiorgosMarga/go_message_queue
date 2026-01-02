@@ -94,7 +94,7 @@ func (pq *PriorityQueue) Size() int {
 }
 
 // Ack confirms the processing of a message
-func (pq *PriorityQueue) Ack(msgID string) error {
+func (pq *PriorityQueue) Ack(msgID int) error {
 	return nil
 }
 

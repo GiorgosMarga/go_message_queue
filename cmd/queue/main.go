@@ -7,8 +7,7 @@ import (
 )
 
 func main() {
-	s := server.NewQueueServer(":8080", server.ModeAckRequired)
-
+	s := server.NewQueueServer(":8080", server.ModePriority|server.ModeAckRequired|server.ModeFileBacked)
 	if err := s.Start(); err != nil {
 		fmt.Println(err)
 	}

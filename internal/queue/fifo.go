@@ -56,7 +56,7 @@ func (f *Fifo) Size() int {
 	return int(f.items)
 }
 
-func (f *Fifo) Ack(msgID string) error {
+func (f *Fifo) Ack(msgID int) error {
 	return nil
 }
 

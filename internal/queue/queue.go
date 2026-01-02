@@ -69,7 +69,7 @@ type Queue interface {
 	Size() int
 
 	// Ack confirms the processing of a message
-	Ack(msgID string) error
+	Ack(msgID int) error
 
 	// Close gracefully shuts down the queue
 	Close() error
