@@ -3,13 +3,15 @@ package queue
 import (
 	"testing"
 	"time"
+
+	"github.com/GiorgosMarga/ibmmq/internal/message"
 )
 
 func TestFifo(t *testing.T) {
 	fifo := NewFifo()
 	items := 10_000_000
 	for i := range items {
-		fifo.Enqueue(&Message{
+		fifo.Enqueue(&message.Message{
 			Id:        i,
 			Body:      []byte("hello"),
 			Timestamp: time.Now(),
@@ -35,7 +37,7 @@ func BenchmarkFifo(b *testing.B) {
 	for b.Loop() {
 		fifo := NewFifo()
 		for i := range items {
-			fifo.Enqueue(&Message{
+			fifo.Enqueue(&message.Message{
 				Id:        i,
 				Body:      []byte("hello"),
 				Timestamp: time.Now(),

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GiorgosMarga/ibmmq/internal/message"
 	"github.com/GiorgosMarga/ibmmq/internal/queue"
 )
 
@@ -31,7 +32,7 @@ const (
 
 type InFlightMessage struct {
 	client       *Client
-	msg          *queue.Message
+	msg          *message.Message
 	lastSendTry  time.Time
 	totalRetries int
 }
@@ -243,7 +244,7 @@ func (qs *QueueServer) handleConn(conn net.Conn) {
 }
 
 func (qs *QueueServer) handlePublishMsg(b []byte) error {
-	msg := &queue.Message{}
+	msg := &message.Message{}
 	if err := msg.Decode(b); err != nil {
 		return err
 	}
