@@ -1,11 +1,13 @@
 package queue
 
+import "github.com/GiorgosMarga/ibmmq/internal/message"
+
 const (
 	MinimumCap = 16
 )
 
 type PriorityQueue struct {
-	items     []*Message
+	items     []*message.Message
 	insertPtr int
 }
 
@@ -15,7 +17,7 @@ func NewPriorityQueue() *PriorityQueue {
 
 func NewPriorityQueueWithCap(capacity int) *PriorityQueue {
 	return &PriorityQueue{
-		items:     make([]*Message, capacity),
+		items:     make([]*message.Message, capacity),
 		insertPtr: 0,
 	}
 
@@ -38,11 +40,11 @@ func (pq *PriorityQueue) heapify(idx int) {
 	}
 }
 func (pq *PriorityQueue) resize(newSize int) {
-	tempBuf := make([]*Message, newSize)
+	tempBuf := make([]*message.Message, newSize)
 	copy(tempBuf, pq.items[:pq.insertPtr])
 	pq.items = tempBuf
 }
-func (pq *PriorityQueue) Enqueue(msg *Message) error {
+func (pq *PriorityQueue) Enqueue(msg *message.Message) error {
 	if pq.insertPtr == len(pq.items) {
 		pq.resize(pq.insertPtr * 2)
 	}
@@ -62,7 +64,7 @@ func (pq *PriorityQueue) Enqueue(msg *Message) error {
 	return nil
 }
 
-func (pq *PriorityQueue) Dequeue() (*Message, error) {
+func (pq *PriorityQueue) Dequeue() (*message.Message, error) {
 	if pq.insertPtr == 0 {
 		return nil, ErrEmptyQueue
 	}
@@ -82,7 +84,7 @@ func (pq *PriorityQueue) Dequeue() (*Message, error) {
 	return res, nil
 }
 
-func (pq *PriorityQueue) Peek() (*Message, error) {
+func (pq *PriorityQueue) Peek() (*message.Message, error) {
 	if pq.insertPtr == 0 {
 		return nil, ErrEmptyQueue
 	}
@@ -93,7 +95,7 @@ func (pq *PriorityQueue) Size() int {
 	return pq.insertPtr
 }
 
-// Ack confirms the processing of a message
+// Ack confirms the processing of a message.Message
 func (pq *PriorityQueue) Ack(msgID int) error {
 	return nil
 }

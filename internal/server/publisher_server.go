@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/GiorgosMarga/ibmmq/internal/message"
 	"github.com/GiorgosMarga/ibmmq/internal/queue"
 )
 
@@ -30,7 +31,7 @@ func (ps *PublisherServer) CreateConn() error {
 }
 
 func (ps *PublisherServer) PublishMessage(body []byte, priority uint16) error {
-	msg := &queue.Message{
+	msg := &message.Message{
 		Id:        rand.Intn(100),
 		Body:      body,
 		Timestamp: time.Now(),

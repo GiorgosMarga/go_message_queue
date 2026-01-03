@@ -1,8 +1,10 @@
 package queue
 
+import "github.com/GiorgosMarga/ibmmq/internal/message"
+
 type Node struct {
 	next  *Node
-	value *Message
+	value *message.Message
 }
 
 type Fifo struct {
@@ -15,7 +17,7 @@ func NewFifo() *Fifo {
 	return &Fifo{}
 }
 
-func (f *Fifo) Enqueue(msg *Message) error {
+func (f *Fifo) Enqueue(msg *message.Message) error {
 	n := &Node{
 		value: msg,
 		next:  nil,
@@ -32,7 +34,7 @@ func (f *Fifo) Enqueue(msg *Message) error {
 	return nil
 }
 
-func (f *Fifo) Dequeue() (*Message, error) {
+func (f *Fifo) Dequeue() (*message.Message, error) {
 	if f.items == 0 {
 		return nil, ErrEmptyQueue
 	}
@@ -45,7 +47,7 @@ func (f *Fifo) Dequeue() (*Message, error) {
 	return n.value, nil
 }
 
-func (f *Fifo) Peek() (*Message, error) {
+func (f *Fifo) Peek() (*message.Message, error) {
 	if f.items == 0 {
 		return nil, ErrEmptyQueue
 	}

@@ -1,12 +1,9 @@
 package queue
 
 import (
-	"bytes"
-	"encoding/binary"
-	"errors"
 	"fmt"
-	"io"
 
+	"github.com/GiorgosMarga/ibmmq/internal/message"
 	"github.com/GiorgosMarga/ibmmq/internal/wal"
 )
 
@@ -34,58 +31,22 @@ func NewFileBackedQueue(filePath string, isPriority bool) (*FileBackedQueue, err
 		q.q = NewFifo()
 	}
 
-	b, err := q.log.Sync()
-	if err != nil {
-		return nil, err
-	}
-	if err := q.syncMessagesFromLog(b); err != nil {
+	if err := q.restoreState(); err != nil {
 		return nil, err
 	}
 
 	return q, nil
 }
-func (fbq *FileBackedQueue) syncMessagesFromLog(b []byte) error {
-	msgs := make(map[uint64]*Message)
-	r := bytes.NewReader(b)
 
-	header := make([]byte, wal.HeaderSize)
-	for {
-		_, err := r.Read(header)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return ErrCorruptedFile
-		}
+func (fbq *FileBackedQueue) restoreState() error {
+	b, err := fbq.log.ReadAll()
+	if err != nil {
+		return err
+	}
 
-		switch header[0] {
-		case wal.AckType:
-			idBuf := make([]byte, 8)
-			_, err := r.Read(idBuf)
-			if err != nil {
-				return ErrCorruptedFile
-			}
-			id := binary.LittleEndian.Uint64(idBuf)
-			_, ok := msgs[id]
-			if !ok {
-				return ErrCorruptedFile
-			}
-			delete(msgs, id)
-		case wal.EnqueueType:
-			msgSize := binary.LittleEndian.Uint16(header[1:])
-			msgBuf := make([]byte, msgSize)
-			n, err := r.Read(msgBuf)
-			if err != nil || n != int(msgSize) {
-				return ErrCorruptedFile
-			}
-			newMsg := &Message{}
-			if err := newMsg.Decode(msgBuf); err != nil {
-				return ErrCorruptedFile
-			}
-			msgs[uint64(newMsg.Id)] = newMsg
-		default:
-			return ErrCorruptedFile
-		}
+	msgs, err := fbq.log.SyncMessagesFromLog(b)
+	if err != nil {
+		return err
 	}
 
 	for _, msg := range msgs {
@@ -95,7 +56,8 @@ func (fbq *FileBackedQueue) syncMessagesFromLog(b []byte) error {
 	}
 	return nil
 }
-func (fbq *FileBackedQueue) Enqueue(msg *Message) error {
+
+func (fbq *FileBackedQueue) Enqueue(msg *message.Message) error {
 	// write file to log
 	b, _ := msg.ToBytes()
 	if err := fbq.log.Write(b); err != nil {
@@ -108,14 +70,14 @@ func (fbq *FileBackedQueue) Enqueue(msg *Message) error {
 	return nil
 }
 
-// Dequeue removes and returns a message from the queue.
+// Dequeue removes and returns a message.Message from the queue.
 // Use Ack() to remove from the log
-func (fbq *FileBackedQueue) Dequeue() (*Message, error) {
+func (fbq *FileBackedQueue) Dequeue() (*message.Message, error) {
 	return fbq.q.Dequeue()
 }
 
-// Peek returns the next message without removing it
-func (fbq *FileBackedQueue) Peek() (*Message, error) {
+// Peek returns the next message.Message without removing it
+func (fbq *FileBackedQueue) Peek() (*message.Message, error) {
 	return fbq.Peek()
 }
 
@@ -124,7 +86,7 @@ func (fbq *FileBackedQueue) Size() int {
 	return fbq.Size()
 }
 
-// Ack confirms the processing of a message
+// Ack confirms the processing of a message.Message
 func (fbq *FileBackedQueue) Ack(msgID int) error {
 	// remove file from log
 	return fbq.log.Ack(msgID)

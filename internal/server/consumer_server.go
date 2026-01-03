@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/GiorgosMarga/ibmmq/internal/queue"
+	"github.com/GiorgosMarga/ibmmq/internal/message"
 )
 
 type ConsumerServer struct {
@@ -29,7 +29,7 @@ func (ps *ConsumerServer) CreateConn() error {
 	return nil
 }
 
-func (ps *ConsumerServer) ConsumeMessage() (*queue.Message, error) {
+func (ps *ConsumerServer) ConsumeMessage() (*message.Message, error) {
 	// Header: length + msg type
 	b := make([]byte, 5)
 	binary.LittleEndian.PutUint32(b, 0)
@@ -49,7 +49,7 @@ func (ps *ConsumerServer) ConsumeMessage() (*queue.Message, error) {
 		return nil, fmt.Errorf("no message")
 	}
 
-	m := &queue.Message{}
+	m := &message.Message{}
 	if err := m.Decode(msgBuf[:n]); err != nil {
 		return nil, err
 	}
