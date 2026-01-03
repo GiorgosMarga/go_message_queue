@@ -27,6 +27,9 @@ type Queue interface {
 	// Size returns the current number of messages in the queue
 	Size() int
 
+	// Get all messages that are currently in the queue. Used in wal compaction
+	GetLiveMessages() []*message.Message
+
 	// Ack confirms the processing of a message
 	Ack(msgID int) error
 

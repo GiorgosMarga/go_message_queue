@@ -17,34 +17,31 @@ type FileBackedQueue struct {
 }
 
 func NewFileBackedQueue(filePath string, isPriority bool) (*FileBackedQueue, error) {
-	log, err := wal.NewWAL(filePath)
+	var q Queue
+	if isPriority {
+		q = NewPriorityQueue()
+	} else {
+		q = NewFifo()
+	}
+
+	log, err := wal.NewWAL(filePath, q)
 	if err != nil {
 		return nil, err
 	}
-	q := &FileBackedQueue{
+	fbq := &FileBackedQueue{
 		log: log,
+		q:   q,
 	}
 
-	if isPriority {
-		q.q = NewPriorityQueue()
-	} else {
-		q.q = NewFifo()
-	}
-
-	if err := q.restoreState(); err != nil {
+	if err := fbq.restoreState(); err != nil {
 		return nil, err
 	}
 
-	return q, nil
+	return fbq, nil
 }
 
 func (fbq *FileBackedQueue) restoreState() error {
-	b, err := fbq.log.ReadAll()
-	if err != nil {
-		return err
-	}
-
-	msgs, err := fbq.log.SyncMessagesFromLog(b)
+	msgs, err := fbq.log.SyncMessagesFromLog()
 	if err != nil {
 		return err
 	}
@@ -90,6 +87,10 @@ func (fbq *FileBackedQueue) Size() int {
 func (fbq *FileBackedQueue) Ack(msgID int) error {
 	// remove file from log
 	return fbq.log.Ack(msgID)
+}
+
+func (fbq *FileBackedQueue) GetLiveMessages() []*message.Message {
+	return fbq.q.GetLiveMessages()
 }
 
 // Close gracefully shuts down the queue

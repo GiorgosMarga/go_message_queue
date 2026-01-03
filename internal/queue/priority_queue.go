@@ -1,6 +1,10 @@
 package queue
 
-import "github.com/GiorgosMarga/ibmmq/internal/message"
+import (
+	"sync"
+
+	"github.com/GiorgosMarga/ibmmq/internal/message"
+)
 
 const (
 	MinimumCap = 16
@@ -9,6 +13,7 @@ const (
 type PriorityQueue struct {
 	items     []*message.Message
 	insertPtr int
+	mtx       *sync.Mutex
 }
 
 func NewPriorityQueue() *PriorityQueue {
@@ -19,6 +24,7 @@ func NewPriorityQueueWithCap(capacity int) *PriorityQueue {
 	return &PriorityQueue{
 		items:     make([]*message.Message, capacity),
 		insertPtr: 0,
+		mtx:       &sync.Mutex{},
 	}
 
 }
@@ -45,6 +51,8 @@ func (pq *PriorityQueue) resize(newSize int) {
 	pq.items = tempBuf
 }
 func (pq *PriorityQueue) Enqueue(msg *message.Message) error {
+	pq.mtx.Lock()
+	defer pq.mtx.Unlock()
 	if pq.insertPtr == len(pq.items) {
 		pq.resize(pq.insertPtr * 2)
 	}
@@ -65,6 +73,8 @@ func (pq *PriorityQueue) Enqueue(msg *message.Message) error {
 }
 
 func (pq *PriorityQueue) Dequeue() (*message.Message, error) {
+	pq.mtx.Lock()
+	defer pq.mtx.Unlock()
 	if pq.insertPtr == 0 {
 		return nil, ErrEmptyQueue
 	}
@@ -85,6 +95,8 @@ func (pq *PriorityQueue) Dequeue() (*message.Message, error) {
 }
 
 func (pq *PriorityQueue) Peek() (*message.Message, error) {
+	pq.mtx.Lock()
+	defer pq.mtx.Unlock()
 	if pq.insertPtr == 0 {
 		return nil, ErrEmptyQueue
 	}
@@ -93,6 +105,14 @@ func (pq *PriorityQueue) Peek() (*message.Message, error) {
 
 func (pq *PriorityQueue) Size() int {
 	return pq.insertPtr
+}
+
+func (pq *PriorityQueue) GetLiveMessages() []*message.Message {
+	pq.mtx.Lock()
+	defer pq.mtx.Unlock()
+	buf := make([]*message.Message, pq.Size())
+	copy(buf, pq.items[:pq.insertPtr])
+	return buf
 }
 
 // Ack confirms the processing of a message.Message

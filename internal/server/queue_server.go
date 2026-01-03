@@ -148,7 +148,7 @@ func (qs *QueueServer) manageInFlightMsgs(ctx context.Context) error {
 					continue
 				}
 				if msg.totalRetries == maxRetries {
-					fmt.Printf("Re-enquiuing msg: %v\n", msg.msg)
+					fmt.Printf("Re-enqueueng msg: %v\n", msg.msg)
 					if err := qs.queue.Enqueue(msg.msg); err != nil {
 						fmt.Println(err)
 						continue
@@ -256,13 +256,17 @@ func (qs *QueueServer) handlePublishMsg(b []byte) error {
 }
 
 func (qs *QueueServer) handleConsumeMsg(client *Client) error {
+	// peek, err := qs.queue.Peek()
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// fmt.Println(peek)
 	msg, err := qs.queue.Dequeue()
-
+	fmt.Println(err)
 	// 1. Handle Empty Queue
 	if err != nil {
-		resp := make([]byte, 2)
-		binary.LittleEndian.PutUint16(resp, uint16(EmptyQueueResp))
-
+		resp := make([]byte, 3)
+		resp[0] = EmptyQueueResp
 		select {
 		case client.sendChan <- resp:
 		default:
@@ -287,8 +291,11 @@ func (qs *QueueServer) handleConsumeMsg(client *Client) error {
 		return err
 	}
 
+	b := make([]byte, len(msgB)+3)
+	binary.LittleEndian.PutUint16(b[1:], uint16(len(msgB)))
+	copy(b[3:], msgB)
 	select {
-	case client.sendChan <- msgB:
+	case client.sendChan <- b:
 		return nil
 	default:
 		// If we fail to send, we should probably remove it from inFlightMsgs

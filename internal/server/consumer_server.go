@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"time"
 
 	"github.com/GiorgosMarga/ibmmq/internal/message"
 )
@@ -39,18 +38,24 @@ func (ps *ConsumerServer) ConsumeMessage() (*message.Message, error) {
 		return nil, err
 	}
 
-	msgBuf := make([]byte, 4096)
-	n, err := ps.conn.Read(msgBuf)
+	headerResponse := make([]byte, 3)
+	_, err = ps.conn.Read(headerResponse)
 	if err != nil {
 		return nil, err
 	}
 
-	if msgBuf[0] == EmptyQueueResp {
+	if headerResponse[0] == EmptyQueueResp {
 		return nil, fmt.Errorf("no message")
 	}
+	size := binary.LittleEndian.Uint16(headerResponse[1:])
 
+	msgBuf := make([]byte, size)
+	_, err = ps.conn.Read(msgBuf)
+	if err != nil {
+		return nil, err
+	}
 	m := &message.Message{}
-	if err := m.Decode(msgBuf[:n]); err != nil {
+	if err := m.Decode(msgBuf); err != nil {
 		return nil, err
 	}
 
@@ -58,7 +63,6 @@ func (ps *ConsumerServer) ConsumeMessage() (*message.Message, error) {
 	binary.LittleEndian.PutUint32(ackBuf, 8)
 	ackBuf[4] = AckMsg
 	binary.LittleEndian.PutUint64(ackBuf[5:], uint64(m.Id))
-	time.Sleep(time.Duration(0) * time.Second)
 	_, err = ps.conn.Write(ackBuf)
 	return m, err
 }

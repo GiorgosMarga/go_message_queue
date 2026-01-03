@@ -26,13 +26,18 @@ var (
 	ErrCorruptedFile = errors.New("corrupted file")
 )
 
+type DataProvider interface {
+	GetLiveMessages() []*message.Message
+}
+
 type WriteAheadLog struct {
 	f        *os.File
 	mtx      *sync.Mutex
+	provider DataProvider
 	quitChan chan struct{}
 }
 
-func NewWAL(filePath string) (*WriteAheadLog, error) {
+func NewWAL(filePath string, dp DataProvider) (*WriteAheadLog, error) {
 	f, err := os.OpenFile(fmt.Sprintf("log/%s", filePath), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o666)
 	if err != nil {
 		return nil, err
@@ -41,17 +46,20 @@ func NewWAL(filePath string) (*WriteAheadLog, error) {
 		f:        f,
 		mtx:      &sync.Mutex{},
 		quitChan: make(chan struct{}),
+		provider: dp,
 	}
 	go wal.compact()
 	return wal, nil
 }
 func (wal *WriteAheadLog) SyncMessagesFromLog() (map[uint64]*message.Message, error) {
-	wal.mtx.Lock()
-	defer wal.mtx.Unlock()
+	readerFile, err := os.Open(wal.f.Name())
+	if err != nil {
+		return nil, err
+	}
 
 	msgs := make(map[uint64]*message.Message)
 
-	r := bufio.NewReader(wal.f)
+	r := bufio.NewReader(readerFile)
 	header := make([]byte, HeaderSize)
 	for {
 		_, err := r.Read(header)
@@ -67,6 +75,8 @@ func (wal *WriteAheadLog) SyncMessagesFromLog() (map[uint64]*message.Message, er
 			idBuf := make([]byte, 8)
 			_, err := r.Read(idBuf)
 			if err != nil {
+				fmt.Println(err)
+
 				return nil, ErrCorruptedFile
 			}
 			id := binary.LittleEndian.Uint64(idBuf)
@@ -78,20 +88,31 @@ func (wal *WriteAheadLog) SyncMessagesFromLog() (map[uint64]*message.Message, er
 		case EnqueueType:
 			msgSize := binary.LittleEndian.Uint16(header[1:])
 			msgBuf := make([]byte, msgSize)
-			n, err := r.Read(msgBuf)
+			n, err := io.ReadFull(r, msgBuf)
 			if err != nil || n != int(msgSize) {
 				return nil, ErrCorruptedFile
 			}
 			newMsg := &message.Message{}
 			if err := newMsg.Decode(msgBuf); err != nil {
+				fmt.Println(err)
 				return nil, ErrCorruptedFile
 			}
+			fmt.Println(newMsg)
 			msgs[uint64(newMsg.Id)] = newMsg
 		default:
 			return nil, ErrCorruptedFile
 		}
 	}
 	return msgs, nil
+}
+
+func (wal *WriteAheadLog) appendData(data []byte, logType int) error {
+	buf := make([]byte, HeaderSize+len(data))
+	buf[0] = byte(logType)
+	binary.LittleEndian.PutUint16(buf[1:], uint16(len(data)))
+	copy(buf[HeaderSize:], data)
+	_, err := wal.f.Write(buf)
+	return err
 }
 func (wal *WriteAheadLog) compact() {
 	ticker := time.NewTicker(time.Minute * 1)
@@ -100,61 +121,85 @@ func (wal *WriteAheadLog) compact() {
 	for {
 		select {
 		case <-ticker.C:
-			msgs, err := wal.SyncMessagesFromLog()
-			if err != nil {
-				fmt.Println(err)
+			// continue
+			stat, _ := wal.f.Stat()
+			if stat.Size() < (1 << 10) {
+				fmt.Printf("Skipping because size (%d) < %d\n", stat.Size(), 1<<10)
 				continue
 			}
-
-			wal.mtx.Lock()
-			defer wal.mtx.Unlock()
-
-			tFile, err := os.Create("/log/file.temp")
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			for _, msg := range msgs {
-				bufMsg, _ := msg.ToBytes()
-				buf := make([]byte, len(bufMsg)+HeaderSize)
-				buf[0] = EnqueueType
-				binary.LittleEndian.PutUint16(buf, uint16(len(bufMsg)))
-				copy(buf[HeaderSize:], bufMsg)
-				_, err := tFile.Write(buf)
-				if err != nil {
-					fmt.Println(err)
-				}
-			}
-
-			if err := tFile.Sync(); err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			if err := wal.f.Close(); err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			if err := os.Remove("/log/file.mq"); err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			if err := os.Rename("/log/file.temp", "/log/file.mq"); err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			wal.f = tFile
-
+			msgs := wal.provider.GetLiveMessages()
+			wal.performSwap(msgs)
 		case <-wal.quitChan:
 			fmt.Println("Stopping compact go-routine")
 			return
 		}
 	}
 
+}
+
+func (wal *WriteAheadLog) performSwap(msgs []*message.Message) {
+	wal.mtx.Lock()
+	defer wal.mtx.Unlock()
+
+	fmt.Println("Performing swap")
+
+	tempPath := "log/file.temp"
+	finalPath := "log/file.mq"
+
+	oldStat, err := wal.f.Stat()
+	if err != nil {
+		fmt.Println("Compaction failed to get stats of the old file:", err)
+		return
+	}
+	oldSize := oldStat.Size()
+
+	tFile, err := os.Create(tempPath)
+	if err != nil {
+		fmt.Println("Compaction failed to create temp file:", err)
+		return
+	}
+
+	for _, msg := range msgs {
+		bufMsg, _ := msg.ToBytes()
+		buf := make([]byte, len(bufMsg)+HeaderSize)
+		buf[0] = EnqueueType
+		binary.LittleEndian.PutUint16(buf[1:], uint16(len(bufMsg)))
+		copy(buf[HeaderSize:], bufMsg)
+		_, err := tFile.Write(buf)
+		if err != nil {
+			fmt.Println("Compaction failed to write buffer:", err)
+			return
+		}
+	}
+
+	if err := tFile.Sync(); err != nil {
+		fmt.Println("Compaction failed to sync temp file:", err)
+		return
+	}
+
+	if err := wal.f.Close(); err != nil {
+		fmt.Println("Compaction failed to close original file:", err)
+		return
+	}
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		fmt.Println("Compaction failed during rename:", err)
+		wal.f, _ = os.OpenFile(finalPath, os.O_APPEND|os.O_RDWR, 0o666)
+		return
+	}
+
+	newFile, err := os.OpenFile(finalPath, os.O_APPEND|os.O_RDWR, 0o666)
+	if err != nil {
+		fmt.Println("Compaction failed to reopen log: ", err)
+		return
+	}
+
+	wal.f = newFile
+	newStat, err := wal.f.Stat()
+	if err != nil {
+		fmt.Println("Compaction failed to stat the new log: ", err)
+		return
+	}
+	fmt.Printf("Compaction successful (%d->%d)\n", oldSize, newStat.Size())
 }
 
 func (wal *WriteAheadLog) ReadAll() ([]byte, error) {
