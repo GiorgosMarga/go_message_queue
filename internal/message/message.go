@@ -12,7 +12,7 @@ type Message struct {
 	Priority  uint16
 }
 
-func (m *Message) ToBytes() ([]byte, error) {
+func (m *Message) Bytes() []byte {
 	b := make([]byte, 4096)
 	idx := 0
 	binary.LittleEndian.PutUint64(b, uint64(m.Id))
@@ -21,15 +21,12 @@ func (m *Message) ToBytes() ([]byte, error) {
 	idx += 2
 	copy(b[idx:], m.Body)
 	idx += len(m.Body)
-	tb, err := m.Timestamp.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
+	tb, _ := m.Timestamp.MarshalBinary()
 	copy(b[idx:], tb)
 	idx += len(tb)
 	binary.LittleEndian.PutUint16(b[idx:], uint16(m.Priority))
 	idx += 2
-	return b[:idx], err
+	return b[:idx]
 }
 
 // TODO: change this

@@ -30,7 +30,7 @@ func main() {
 	for i := range numOfPublishers {
 		wg.Add(1)
 		go func() {
-			publisher := server.NewPublisherServer(":8080")
+			publisher := server.NewPublisherServer(":5000")
 
 			if err := publisher.CreateConn(); err != nil {
 				log.Fatal(err)

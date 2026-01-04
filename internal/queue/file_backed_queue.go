@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/GiorgosMarga/ibmmq/internal/message"
@@ -24,7 +25,7 @@ func NewFileBackedQueue(filePath string, isPriority bool) (*FileBackedQueue, err
 		q = NewFifo()
 	}
 
-	log, err := wal.NewWAL(filePath, q)
+	log, err := wal.NewWAL(filePath, 1<<10, 10, true)
 	if err != nil {
 		return nil, err
 	}
@@ -41,23 +42,12 @@ func NewFileBackedQueue(filePath string, isPriority bool) (*FileBackedQueue, err
 }
 
 func (fbq *FileBackedQueue) restoreState() error {
-	msgs, err := fbq.log.SyncMessagesFromLog()
-	if err != nil {
-		return err
-	}
-
-	for _, msg := range msgs {
-		if err := fbq.q.Enqueue(msg); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (fbq *FileBackedQueue) Enqueue(msg *message.Message) error {
 	// write file to log
-	b, _ := msg.ToBytes()
-	if err := fbq.log.Write(b); err != nil {
+	if err := fbq.log.Write(msg.Bytes(), false); err != nil {
 		return err
 	}
 
@@ -85,8 +75,9 @@ func (fbq *FileBackedQueue) Size() int {
 
 // Ack confirms the processing of a message.Message
 func (fbq *FileBackedQueue) Ack(msgID int) error {
-	// remove file from log
-	return fbq.log.Ack(msgID)
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(msgID))
+	return fbq.log.Write(buf, true)
 }
 
 func (fbq *FileBackedQueue) GetLiveMessages() []*message.Message {

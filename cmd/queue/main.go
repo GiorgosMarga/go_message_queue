@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 
 	"github.com/GiorgosMarga/ibmmq/internal/server"
@@ -8,7 +9,10 @@ import (
 
 func main() {
 
-	s := server.NewQueueServer(":8080", server.ModePriority|server.ModeAckRequired|server.ModeFileBacked)
+	var port string
+	flag.StringVar(&port, "port", ":8080", "port")
+	flag.Parse()
+	s := server.NewQueueServer(port, server.ModePriority|server.ModeAckRequired|server.ModeFileBacked)
 	if err := s.Start(); err != nil {
 		fmt.Println(err)
 	}

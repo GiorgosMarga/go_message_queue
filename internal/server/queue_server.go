@@ -81,7 +81,7 @@ func NewQueueServer(lAddr string, mode Mode) *QueueServer {
 	}
 	if mode&ModeFileBacked != 0 {
 		var err error
-		qs.queue, err = queue.NewFileBackedQueue("file.mq", mode&ModePriority != 0)
+		qs.queue, err = queue.NewFileBackedQueue("wal", mode&ModePriority != 0)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -135,7 +135,7 @@ func (c *Client) writeLoop() {
 }
 
 func (qs *QueueServer) manageInFlightMsgs(ctx context.Context) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(1 * time.Second)
 	timeout := 3 * time.Second
 	maxRetries := 5
 	for {
@@ -165,11 +165,7 @@ func (qs *QueueServer) manageInFlightMsgs(ctx context.Context) error {
 
 			for _, msg := range msgs {
 				fmt.Println("Resending message: ", msg.msg.Id)
-				b, err := msg.msg.ToBytes()
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
+				b := msg.msg.Bytes()
 				select {
 				case msg.client.sendChan <- b:
 				case <-msg.client.quitChan:
@@ -248,7 +244,7 @@ func (qs *QueueServer) handlePublishMsg(b []byte) error {
 	if err := msg.Decode(b); err != nil {
 		return err
 	}
-	fmt.Printf("[QS]: %+v\n", msg)
+	// fmt.Printf("[QS]: %+v\n", msg)
 	if err := qs.queue.Enqueue(msg); err != nil {
 		return err
 	}
@@ -256,13 +252,8 @@ func (qs *QueueServer) handlePublishMsg(b []byte) error {
 }
 
 func (qs *QueueServer) handleConsumeMsg(client *Client) error {
-	// peek, err := qs.queue.Peek()
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-	// fmt.Println(peek)
+
 	msg, err := qs.queue.Dequeue()
-	fmt.Println(err)
 	// 1. Handle Empty Queue
 	if err != nil {
 		resp := make([]byte, 3)
@@ -286,10 +277,7 @@ func (qs *QueueServer) handleConsumeMsg(client *Client) error {
 		qs.mtx.Unlock()
 	}
 
-	msgB, err := msg.ToBytes()
-	if err != nil {
-		return err
-	}
+	msgB := msg.Bytes()
 
 	b := make([]byte, len(msgB)+3)
 	binary.LittleEndian.PutUint16(b[1:], uint16(len(msgB)))
@@ -319,7 +307,8 @@ func (qs *QueueServer) handleAckMsg(b []byte) error {
 	qs.mtx.Lock()
 	defer qs.mtx.Unlock()
 	if _, ok := qs.inFlightMsgs[int(id)]; !ok {
-		return fmt.Errorf("[QS]: ack id doesn't exist")
+		fmt.Println(qs.inFlightMsgs)
+		return fmt.Errorf("[QS]: ack id %d doesn't exist", id)
 	}
 	delete(qs.inFlightMsgs, int(id))
 	return nil

@@ -59,10 +59,11 @@ func (ps *ConsumerServer) ConsumeMessage() (*message.Message, error) {
 		return nil, err
 	}
 
-	ackBuf := make([]byte, 13) // header + id
-	binary.LittleEndian.PutUint32(ackBuf, 8)
-	ackBuf[4] = AckMsg
+	ackBuf := make([]byte, 13)               // header + id
+	binary.LittleEndian.PutUint16(ackBuf, 8) // put msg length
+	ackBuf[4] = AckMsg                       // add type
 	binary.LittleEndian.PutUint64(ackBuf[5:], uint64(m.Id))
 	_, err = ps.conn.Write(ackBuf)
+	fmt.Printf("%+v\n", m)
 	return m, err
 }

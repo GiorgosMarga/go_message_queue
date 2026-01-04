@@ -2,11 +2,13 @@ package wal
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -26,221 +28,212 @@ var (
 	ErrCorruptedFile = errors.New("corrupted file")
 )
 
+const (
+	SyncInterval  = 500 * time.Millisecond
+	SegmentPrefix = "segment-"
+)
+
 type DataProvider interface {
 	GetLiveMessages() []*message.Message
 }
 
+type WALEntry struct {
+	// Log Serial Number
+	lsn  uint64
+	Data []byte
+	// Checksum
+	crc          uint32
+	isCheckpoint bool
+}
 type WriteAheadLog struct {
-	f        *os.File
-	mtx      *sync.Mutex
-	provider DataProvider
-	quitChan chan struct{}
+	directory        string
+	lastSegmentIdx   uint64
+	lastSequenceNo   uint64
+	currentSegment   *os.File
+	writerBuf        *bufio.Writer
+	mtx              *sync.Mutex
+	maxSegmentSize   int
+	maxTotalSegments int
+	shouldFsync      bool
+	fsyncTimer       *time.Timer
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
-func NewWAL(filePath string, dp DataProvider) (*WriteAheadLog, error) {
-	f, err := os.OpenFile(fmt.Sprintf("log/%s", filePath), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o666)
+func NewWAL(path string, maxSegmentSize, maxTotalSegments int, shouldFsync bool) (*WriteAheadLog, error) {
+	if err := os.MkdirAll(path, 0777); err != nil {
+		return nil, err
+	}
+
+	segments, err := filepath.Glob(filepath.Join(path, SegmentPrefix+"*"))
 	if err != nil {
 		return nil, err
 	}
-	wal := &WriteAheadLog{
-		f:        f,
-		mtx:      &sync.Mutex{},
-		quitChan: make(chan struct{}),
-		provider: dp,
+
+	var lastSegmentId uint64
+	if len(segments) == 0 {
+		f, err := createSegmentFile(path, 0)
+		if err != nil {
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+	} else {
+		lastSegmentId, err = findLastIdxFromSegments(segments)
+		if err != nil {
+			return nil, err
+		}
 	}
-	go wal.compact()
+
+	f, err := os.OpenFile(filepath.Join(path, fmt.Sprintf("%s%d", SegmentPrefix, lastSegmentId)), os.O_RDWR, 0o666)
+	if err != nil {
+		return nil, err
+	}
+	timer := time.NewTimer(SyncInterval)
+	ctx, cancel := context.WithCancel(context.Background())
+	wal := &WriteAheadLog{
+		currentSegment:   f,
+		writerBuf:        bufio.NewWriter(f),
+		directory:        path,
+		lastSegmentIdx:   lastSegmentId,
+		lastSequenceNo:   0,
+		mtx:              &sync.Mutex{},
+		maxSegmentSize:   maxSegmentSize,
+		maxTotalSegments: maxTotalSegments,
+		shouldFsync:      shouldFsync,
+		fsyncTimer:       timer,
+		ctx:              ctx,
+		cancel:           cancel,
+	}
+
+	go wal.syncLoop()
 	return wal, nil
 }
-func (wal *WriteAheadLog) SyncMessagesFromLog() (map[uint64]*message.Message, error) {
-	readerFile, err := os.Open(wal.f.Name())
-	if err != nil {
-		return nil, err
-	}
 
-	msgs := make(map[uint64]*message.Message)
-
-	r := bufio.NewReader(readerFile)
-	header := make([]byte, HeaderSize)
+func (wal *WriteAheadLog) ReadAll() ([][]byte, error) {
+	wal.mtx.Lock()
+	defer wal.mtx.Unlock()
+	result := make([][]byte, 0, 1024)
+	headerBuf := make([]byte, 4)
 	for {
-		_, err := r.Read(header)
+		_, err := wal.currentSegment.Read(headerBuf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				break
+				return result, nil
 			}
-			return nil, ErrCorruptedFile
+			return nil, err
 		}
-
-		switch header[0] {
-		case AckType:
-			idBuf := make([]byte, 8)
-			_, err := r.Read(idBuf)
-			if err != nil {
-				fmt.Println(err)
-
-				return nil, ErrCorruptedFile
-			}
-			id := binary.LittleEndian.Uint64(idBuf)
-			_, ok := msgs[id]
-			if !ok {
-				return nil, ErrCorruptedFile
-			}
-			delete(msgs, id)
-		case EnqueueType:
-			msgSize := binary.LittleEndian.Uint16(header[1:])
-			msgBuf := make([]byte, msgSize)
-			n, err := io.ReadFull(r, msgBuf)
-			if err != nil || n != int(msgSize) {
-				return nil, ErrCorruptedFile
-			}
-			newMsg := &message.Message{}
-			if err := newMsg.Decode(msgBuf); err != nil {
-				fmt.Println(err)
-				return nil, ErrCorruptedFile
-			}
-			fmt.Println(newMsg)
-			msgs[uint64(newMsg.Id)] = newMsg
-		default:
-			return nil, ErrCorruptedFile
+		entrySize := binary.LittleEndian.Uint32(headerBuf)
+		entryBuf := make([]byte, entrySize)
+		_, err = wal.currentSegment.Read(entryBuf)
+		if err != nil {
+			return nil, err
 		}
+		entry, err := entryFromBytes(entryBuf)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entry.Data)
 	}
-	return msgs, nil
 }
 
-func (wal *WriteAheadLog) appendData(data []byte, logType int) error {
-	buf := make([]byte, HeaderSize+len(data))
-	buf[0] = byte(logType)
-	binary.LittleEndian.PutUint16(buf[1:], uint16(len(data)))
-	copy(buf[HeaderSize:], data)
-	_, err := wal.f.Write(buf)
+func (wal *WriteAheadLog) Write(data []byte, isCheckpoint bool) error {
+	wal.mtx.Lock()
+	defer wal.mtx.Unlock()
+	wal.lastSequenceNo++
+	entry := &WALEntry{
+		lsn:          wal.lastSequenceNo,
+		Data:         data,
+		isCheckpoint: isCheckpoint,
+	}
+
+	buf := entry.bytes()
+
+	fit, err := wal.fitInSegment(len(buf))
+	if err != nil {
+		return err
+	}
+	if !fit {
+		if err := wal.rotateSegment(); err != nil {
+			return err
+		}
+	}
+
+	_, err = wal.writerBuf.Write(buf)
 	return err
 }
-func (wal *WriteAheadLog) compact() {
-	ticker := time.NewTicker(time.Minute * 1)
-	defer ticker.Stop()
+func (wal *WriteAheadLog) rotateSegment() error {
+	segments, err := filepath.Glob(filepath.Join(wal.directory, SegmentPrefix+"*"))
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	if len(segments) == wal.maxTotalSegments {
+		if err := deleteOldestSegment(wal.directory, segments); err != nil {
+			return err
+		}
+	}
+	if err := wal.Close(); err != nil {
+		return err
+	}
 
+	wal.lastSegmentIdx++
+	wal.currentSegment, err = createSegmentFile(wal.directory, int(wal.lastSegmentIdx))
+	if err != nil {
+		return err
+	}
+	wal.writerBuf = bufio.NewWriter(wal.currentSegment)
+	return err
+}
+func (wal *WriteAheadLog) syncLoop() {
 	for {
 		select {
-		case <-ticker.C:
-			// continue
-			stat, _ := wal.f.Stat()
-			if stat.Size() < (1 << 10) {
-				fmt.Printf("Skipping because size (%d) < %d\n", stat.Size(), 1<<10)
-				continue
+		case <-wal.fsyncTimer.C:
+			wal.mtx.Lock()
+			if err := wal.Sync(); err != nil {
+				fmt.Println("[SyncLoop]:", err)
 			}
-			msgs := wal.provider.GetLiveMessages()
-			wal.performSwap(msgs)
-		case <-wal.quitChan:
-			fmt.Println("Stopping compact go-routine")
+			wal.mtx.Unlock()
+
+		case <-wal.ctx.Done():
+			fmt.Println("[SyncLoop]: Done")
 			return
 		}
 	}
 
 }
 
-func (wal *WriteAheadLog) performSwap(msgs []*message.Message) {
-	wal.mtx.Lock()
-	defer wal.mtx.Unlock()
-
-	fmt.Println("Performing swap")
-
-	tempPath := "log/file.temp"
-	finalPath := "log/file.mq"
-
-	oldStat, err := wal.f.Stat()
-	if err != nil {
-		fmt.Println("Compaction failed to get stats of the old file:", err)
-		return
-	}
-	oldSize := oldStat.Size()
-
-	tFile, err := os.Create(tempPath)
-	if err != nil {
-		fmt.Println("Compaction failed to create temp file:", err)
-		return
+func (wal *WriteAheadLog) Sync() error {
+	if err := wal.writerBuf.Flush(); err != nil {
+		return err
 	}
 
-	for _, msg := range msgs {
-		bufMsg, _ := msg.ToBytes()
-		buf := make([]byte, len(bufMsg)+HeaderSize)
-		buf[0] = EnqueueType
-		binary.LittleEndian.PutUint16(buf[1:], uint16(len(bufMsg)))
-		copy(buf[HeaderSize:], bufMsg)
-		_, err := tFile.Write(buf)
-		if err != nil {
-			fmt.Println("Compaction failed to write buffer:", err)
-			return
+	if wal.shouldFsync {
+		if err := wal.currentSegment.Sync(); err != nil {
+			return err
 		}
 	}
+	wal.fsyncTimer.Reset(SyncInterval)
+	return nil
+}
 
-	if err := tFile.Sync(); err != nil {
-		fmt.Println("Compaction failed to sync temp file:", err)
-		return
-	}
-
-	if err := wal.f.Close(); err != nil {
-		fmt.Println("Compaction failed to close original file:", err)
-		return
-	}
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		fmt.Println("Compaction failed during rename:", err)
-		wal.f, _ = os.OpenFile(finalPath, os.O_APPEND|os.O_RDWR, 0o666)
-		return
-	}
-
-	newFile, err := os.OpenFile(finalPath, os.O_APPEND|os.O_RDWR, 0o666)
+func (wal *WriteAheadLog) fitInSegment(newEntrySize int) (bool, error) {
+	stat, err := wal.currentSegment.Stat()
 	if err != nil {
-		fmt.Println("Compaction failed to reopen log: ", err)
-		return
+		return false, err
 	}
 
-	wal.f = newFile
-	newStat, err := wal.f.Stat()
-	if err != nil {
-		fmt.Println("Compaction failed to stat the new log: ", err)
-		return
+	if stat.Size()+int64(newEntrySize) >= int64(wal.maxSegmentSize) {
+		return false, nil
 	}
-	fmt.Printf("Compaction successful (%d->%d)\n", oldSize, newStat.Size())
-}
-
-func (wal *WriteAheadLog) ReadAll() ([]byte, error) {
-	wal.mtx.Lock()
-	defer wal.mtx.Unlock()
-	return io.ReadAll(wal.f)
-}
-func (wal *WriteAheadLog) Write(b []byte) error {
-	wal.mtx.Lock()
-	defer wal.mtx.Unlock()
-
-	buf := make([]byte, len(b)+HeaderSize)
-	// write header
-	buf[0] = EnqueueType
-	binary.LittleEndian.PutUint16(buf[1:], uint16(len(b)))
-	// copy body
-	copy(buf[HeaderSize:], b)
-	if _, err := wal.f.Write(buf); err != nil {
-		return err
-	}
-	return wal.f.Sync()
-}
-func (wal *WriteAheadLog) Ack(msgID int) error {
-	wal.mtx.Lock()
-	defer wal.mtx.Unlock()
-
-	buf := make([]byte, IDSize+HeaderSize)
-	// write header
-	buf[0] = AckType
-	binary.LittleEndian.PutUint64(buf[HeaderSize:], uint64(msgID))
-	if _, err := wal.f.Write(buf); err != nil {
-		return err
-	}
-	return wal.f.Sync()
+	return true, nil
 }
 
 func (wal *WriteAheadLog) Close() error {
-	close(wal.quitChan)
-
-	// to ensure not in the middle of a write
-	wal.mtx.Lock()
-	defer wal.mtx.Unlock()
-	return wal.Close()
+	wal.cancel()
+	if err := wal.Sync(); err != nil {
+		return err
+	}
+	return wal.currentSegment.Close()
 }

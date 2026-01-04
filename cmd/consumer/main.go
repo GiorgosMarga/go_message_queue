@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"sync"
+	"time"
 
 	"github.com/GiorgosMarga/ibmmq/internal/server"
 )
@@ -25,7 +27,7 @@ func main() {
 	wg := &sync.WaitGroup{}
 	for i := range numOfConsumers {
 		wg.Go(func() {
-			publisher := server.NewConsumerServer(":8080")
+			publisher := server.NewConsumerServer(":5000")
 
 			if err := publisher.CreateConn(); err != nil {
 				log.Fatal(err)
@@ -37,6 +39,12 @@ func main() {
 					fmt.Println(err)
 				}
 				fmt.Printf("[%d]: consumed %d/%d\n", i, j+1, messagesToConsume)
+
+				if delay == -1 {
+					time.Sleep(time.Duration(rand.Intn(100)) * time.Second)
+				} else {
+					time.Sleep(time.Duration(delay) * time.Second)
+				}
 			}
 		})
 	}

@@ -32,20 +32,16 @@ func (ps *PublisherServer) CreateConn() error {
 
 func (ps *PublisherServer) PublishMessage(body []byte, priority uint16) error {
 	msg := &message.Message{
-		Id:        rand.Intn(100),
+		Id:        rand.Intn(100000),
 		Body:      body,
 		Timestamp: time.Now(),
 		Priority:  priority,
 	}
-	bmsg, err := msg.ToBytes()
-	if err != nil {
-		return err
-	}
-
+	bmsg := msg.Bytes()
 	b := make([]byte, queue.HeaderSize+len(bmsg))
 	binary.LittleEndian.PutUint32(b, uint32(len(bmsg)))
 	b[4] = PublishMsg
 	copy(b[5:], bmsg)
-	_, err = ps.conn.Write(b)
+	_, err := ps.conn.Write(b)
 	return err
 }
