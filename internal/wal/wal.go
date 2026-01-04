@@ -161,6 +161,7 @@ func (wal *WriteAheadLog) Write(data []byte, isCheckpoint bool) error {
 	}
 
 	_, err = wal.writerBuf.Write(buf)
+
 	return err
 }
 func (wal *WriteAheadLog) rotateSegment() error {
