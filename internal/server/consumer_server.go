@@ -54,8 +54,8 @@ func (ps *ConsumerServer) ConsumeMessage() (*message.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &message.Message{}
-	if err := m.Decode(msgBuf); err != nil {
+	m, err := message.MsgFromBytes(msgBuf)
+	if err != nil {
 		return nil, err
 	}
 

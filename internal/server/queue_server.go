@@ -46,7 +46,7 @@ type Client struct {
 type QueueServer struct {
 	listenAddr   string
 	queue        queue.Queue
-	inFlightMsgs map[int]*InFlightMessage
+	inFlightMsgs map[uint64]*InFlightMessage
 	mtx          *sync.Mutex
 	ctx          context.Context
 	mode         Mode
@@ -77,7 +77,7 @@ func NewQueueServer(lAddr string, mode Mode) *QueueServer {
 	}
 
 	if mode&ModeAckRequired != 0 {
-		qs.inFlightMsgs = make(map[int]*InFlightMessage)
+		qs.inFlightMsgs = make(map[uint64]*InFlightMessage)
 	}
 	if mode&ModeFileBacked != 0 {
 		var err error
@@ -240,8 +240,8 @@ func (qs *QueueServer) handleConn(conn net.Conn) {
 }
 
 func (qs *QueueServer) handlePublishMsg(b []byte) error {
-	msg := &message.Message{}
-	if err := msg.Decode(b); err != nil {
+	msg, err := message.MsgFromBytes(b)
+	if err != nil {
 		return err
 	}
 	// fmt.Printf("[QS]: %+v\n", msg)
@@ -306,10 +306,10 @@ func (qs *QueueServer) handleAckMsg(b []byte) error {
 	}
 	qs.mtx.Lock()
 	defer qs.mtx.Unlock()
-	if _, ok := qs.inFlightMsgs[int(id)]; !ok {
+	if _, ok := qs.inFlightMsgs[id]; !ok {
 		fmt.Println(qs.inFlightMsgs)
 		return fmt.Errorf("[QS]: ack id %d doesn't exist", id)
 	}
-	delete(qs.inFlightMsgs, int(id))
+	delete(qs.inFlightMsgs, id)
 	return nil
 }

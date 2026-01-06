@@ -32,8 +32,9 @@ func (ps *PublisherServer) CreateConn() error {
 
 func (ps *PublisherServer) PublishMessage(body []byte, priority uint16) error {
 	msg := &message.Message{
-		Id:        rand.Intn(100000),
+		Id:        rand.Uint64(),
 		Body:      body,
+		Type:      message.MessageEnqueue,
 		Timestamp: time.Now(),
 		Priority:  priority,
 	}

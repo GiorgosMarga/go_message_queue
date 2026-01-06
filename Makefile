@@ -2,7 +2,7 @@ queue:
 	go run ./cmd/queue/main.go -port=":5000"
 
 consumer:
-	go run ./cmd/consumer/main.go -messagesToConsume=100 -delay=0 -numOfConsumers=10
+	go run ./cmd/consumer/main.go -messagesToConsume=100 -delay=0 -numOfConsumers=2
 
 publisher:
 	go run ./cmd/publisher/main.go -messagesToSend=100 -delay=0 -withPriority=0 -numOfPublishers=10

@@ -12,7 +12,8 @@ func TestFifo(t *testing.T) {
 	items := 10_000_000
 	for i := range items {
 		fifo.Enqueue(&message.Message{
-			Id:        i,
+			Id:        uint64(i),
+			Type:      message.MessageEnqueue,
 			Body:      []byte("hello"),
 			Timestamp: time.Now(),
 			Priority:  0,
@@ -24,7 +25,7 @@ func TestFifo(t *testing.T) {
 			t.Error(err)
 		}
 
-		if i != m.Id {
+		if uint64(i) != m.Id {
 			t.Error()
 		}
 	}
@@ -38,7 +39,8 @@ func BenchmarkFifo(b *testing.B) {
 		fifo := NewFifo()
 		for i := range items {
 			fifo.Enqueue(&message.Message{
-				Id:        i,
+				Id:        uint64(i),
+				Type:      message.MessageEnqueue,
 				Body:      []byte("hello"),
 				Timestamp: time.Now(),
 				Priority:  0,

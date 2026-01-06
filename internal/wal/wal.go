@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/GiorgosMarga/ibmmq/internal/message"
 )
 
 const (
@@ -32,10 +30,6 @@ const (
 	SyncInterval  = 500 * time.Millisecond
 	SegmentPrefix = "segment-"
 )
-
-type DataProvider interface {
-	GetLiveMessages() []*message.Message
-}
 
 type WALEntry struct {
 	// Log Serial Number
@@ -111,36 +105,57 @@ func NewWAL(path string, maxSegmentSize, maxTotalSegments int, shouldFsync bool)
 	return wal, nil
 }
 
+func (wal *WriteAheadLog) RestoreState() ([][]byte, error) {
+	result := make([][]byte, 0, 1024)
+	segments, err := filepath.Glob(filepath.Join(wal.directory, SegmentPrefix+"*"))
+	if err != nil {
+		return nil, err
+	}
+
+	for _, segment := range segments {
+		fmt.Println("[WAL]: Restoring from segment", segment)
+		f, err := os.Open(segment)
+		if err != nil {
+			return nil, err
+		}
+
+		r := bufio.NewReader(f)
+		entries, err := wal.readAll(r)
+		if err != nil {
+			switch {
+			case errors.Is(err, ErrCorruptedFile):
+				continue
+			default:
+				return nil, err
+			}
+		}
+		result = append(result, entries...)
+
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
 func (wal *WriteAheadLog) ReadAll() ([][]byte, error) {
 	wal.mtx.Lock()
 	defer wal.mtx.Unlock()
-	result := make([][]byte, 0, 1024)
-	headerBuf := make([]byte, 4)
-	for {
-		_, err := wal.currentSegment.Read(headerBuf)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return result, nil
-			}
-			return nil, err
-		}
-		entrySize := binary.LittleEndian.Uint32(headerBuf)
-		entryBuf := make([]byte, entrySize)
-		_, err = wal.currentSegment.Read(entryBuf)
-		if err != nil {
-			return nil, err
-		}
-		entry, err := entryFromBytes(entryBuf)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, entry.Data)
+
+	f, err := os.Open(wal.currentSegment.Name())
+	if err != nil {
+		return nil, err
 	}
+	defer f.Close()
+	return wal.readAll(f)
 }
 
 func (wal *WriteAheadLog) Write(data []byte, isCheckpoint bool) error {
 	wal.mtx.Lock()
 	defer wal.mtx.Unlock()
+	return wal.write(data, isCheckpoint)
+}
+func (wal *WriteAheadLog) write(data []byte, isCheckpoint bool) error {
+
 	wal.lastSequenceNo++
 	entry := &WALEntry{
 		lsn:          wal.lastSequenceNo,
@@ -148,8 +163,19 @@ func (wal *WriteAheadLog) Write(data []byte, isCheckpoint bool) error {
 		isCheckpoint: isCheckpoint,
 	}
 
-	buf := entry.bytes()
+	if err := wal.writeEntry(wal.writerBuf, entry); err != nil {
+		return err
+	}
 
+	if isCheckpoint {
+		if err := wal.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (wal *WriteAheadLog) writeEntry(r io.Writer, entry *WALEntry) error {
+	buf := entry.bytes()
 	fit, err := wal.fitInSegment(len(buf))
 	if err != nil {
 		return err
@@ -159,11 +185,51 @@ func (wal *WriteAheadLog) Write(data []byte, isCheckpoint bool) error {
 			return err
 		}
 	}
-
-	_, err = wal.writerBuf.Write(buf)
+	binary.Write(r, binary.LittleEndian, uint32(len(buf)))
+	_, err = r.Write(buf)
 
 	return err
 }
+
+func (wal *WriteAheadLog) Repair() error {
+	f, err := os.Open(wal.currentSegment.Name())
+	if err != nil {
+		return err
+	}
+	entries := make([]*WALEntry, 0)
+	for {
+		entry, err := wal.readEntry(f)
+		if err != nil {
+			switch {
+			case errors.Is(err, io.EOF):
+				return nil
+			default:
+				return wal.repairSegment(entries)
+			}
+		}
+		entries = append(entries, entry)
+	}
+
+}
+
+func (wal *WriteAheadLog) repairSegment(entries []*WALEntry) error {
+	tempF, err := os.OpenFile(filepath.Join(wal.directory, "repair.tmp"), os.O_WRONLY, 0o666)
+	if err != nil {
+		return err
+	}
+	defer tempF.Close()
+	for _, entry := range entries {
+		if err := wal.writeEntry(tempF, entry); err != nil {
+			return err
+		}
+	}
+
+	if err := os.Rename(tempF.Name(), wal.currentSegment.Name()); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (wal *WriteAheadLog) rotateSegment() error {
 	segments, err := filepath.Glob(filepath.Join(wal.directory, SegmentPrefix+"*"))
 	if err != nil {
@@ -180,7 +246,7 @@ func (wal *WriteAheadLog) rotateSegment() error {
 	}
 
 	wal.lastSegmentIdx++
-	wal.currentSegment, err = createSegmentFile(wal.directory, int(wal.lastSegmentIdx))
+	wal.currentSegment, err = createSegmentFile(wal.directory, wal.lastSegmentIdx)
 	if err != nil {
 		return err
 	}
@@ -229,6 +295,86 @@ func (wal *WriteAheadLog) fitInSegment(newEntrySize int) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func (wal WriteAheadLog) readAll(f io.Reader) ([][]byte, error) {
+	result := make([][]byte, 0, 1024)
+	for {
+		entry, err := wal.readEntry(f)
+		if err != nil {
+			switch {
+			case errors.Is(err, io.EOF):
+				return result, nil
+			default:
+				return nil, err
+			}
+		}
+		if len(entry.Data) == 0 && entry.isCheckpoint {
+			continue
+		}
+		result = append(result, entry.Data)
+	}
+}
+
+func (wal *WriteAheadLog) readEntry(r io.Reader) (*WALEntry, error) {
+	var size uint32
+	if err := binary.Read(r, binary.LittleEndian, &size); err != nil {
+		return nil, err
+	}
+
+	entryBuf := make([]byte, size)
+	_, err := io.ReadFull(r, entryBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	return entryFromBytes(entryBuf)
+
+}
+
+func (wal *WriteAheadLog) Compact(data [][]byte) error {
+	wal.mtx.Lock()
+	defer wal.mtx.Unlock()
+
+	if err := wal.Sync(); err != nil {
+		return err
+	}
+
+	if err := wal.currentSegment.Close(); err != nil {
+		return err
+	}
+
+	// clear segments
+	wal.lastSegmentIdx++
+	deleteBeforeIdx := wal.lastSegmentIdx
+	newSegment, err := createSegmentFile(wal.directory, wal.lastSegmentIdx)
+	if err != nil {
+		return err
+	}
+	wal.currentSegment = newSegment
+	wal.writerBuf = bufio.NewWriter(wal.currentSegment)
+
+	// write checkpoint
+	if err := wal.write(nil, true); err != nil {
+		return err
+	}
+
+	for _, d := range data {
+		if err := wal.write(d, false); err != nil {
+			return err
+		}
+	}
+
+	if err := wal.Sync(); err != nil {
+		return err
+	}
+	n, err := deleteSegmentsBeforeIdx(wal.directory, deleteBeforeIdx)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("[WAL]: Removed %d old segments\n", n)
+	return nil
 }
 
 func (wal *WriteAheadLog) Close() error {

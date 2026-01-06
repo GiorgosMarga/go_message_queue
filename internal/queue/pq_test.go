@@ -11,7 +11,7 @@ func TestPriorityQueue(t *testing.T) {
 
 	for i := range 1000 {
 		if err := pq.Enqueue(&message.Message{
-			Id:       i,
+			Id:       uint64(i),
 			Priority: uint16(i),
 		}); err != nil {
 			t.Fatal(err)
