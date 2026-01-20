@@ -150,7 +150,7 @@ func (fbq *FileBackedQueue) Ack(msgID int) error {
 	msg := &message.Message{
 		Id:        uint64(msgID),
 		Type:      message.MessageAck,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().Unix(),
 		Body:      buf,
 		Priority:  0,
 	}

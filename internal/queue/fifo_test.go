@@ -15,7 +15,7 @@ func TestFifo(t *testing.T) {
 			Id:        uint64(i),
 			Type:      message.MessageEnqueue,
 			Body:      []byte("hello"),
-			Timestamp: time.Now(),
+			Timestamp: time.Now().Unix(),
 			Priority:  0,
 		})
 	}
@@ -42,7 +42,7 @@ func BenchmarkFifo(b *testing.B) {
 				Id:        uint64(i),
 				Type:      message.MessageEnqueue,
 				Body:      []byte("hello"),
-				Timestamp: time.Now(),
+				Timestamp: time.Now().Unix(),
 				Priority:  0,
 			})
 		}

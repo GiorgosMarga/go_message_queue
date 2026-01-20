@@ -35,7 +35,7 @@ func (ps *PublisherServer) PublishMessage(body []byte, priority uint16) error {
 		Id:        rand.Uint64(),
 		Body:      body,
 		Type:      message.MessageEnqueue,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().Unix(),
 		Priority:  priority,
 	}
 	bmsg := msg.Bytes()
